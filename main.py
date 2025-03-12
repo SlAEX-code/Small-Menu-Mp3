@@ -3,7 +3,8 @@ import sys
 import time
 import pygame
 from pygame.locals import *
-from PIL import Image
+import vlc
+
 import spidev
 import lgpio
 import numpy as np
@@ -145,10 +146,18 @@ pygame.display.set_caption("MP3 Player")
 
 state = "main"  # "main" = Hauptmenü, "play" = Wiedergabe
 
+# ----------------------------
+# VLC-Instanz und Media Player erstellen
+# ----------------------------
+vlc_instance = vlc.Instance()
+player = vlc_instance.media_player_new()
+
+
+
 mp3_folder = "mp3_files"
-mp3_files = [f for f in os.listdir(mp3_folder) if f.lower().endswith('.mp3')]
-if not mp3_files:
-    print("Keine MP3-Dateien gefunden!")
+audio_files = [f for f in os.listdir(mp3_folder) if f.lower().endswith(('.mp3', '.wav'))]
+if not audio_files:
+    print("Keine Audio-Dateien gefunden!")
     sys.exit()
 
 selected_index = 0         # Index im Hauptmenü
@@ -156,13 +165,23 @@ current_song_index = None  # Aktuell gespielter Song
 paused = False             
 clock = pygame.time.Clock()
 
+import wave
 try:
     from mutagen.mp3 import MP3
-    def get_mp3_length(path):
-        return MP3(path).info.length
 except ImportError:
-    def get_mp3_length(path):
-        return 180.0  # Fallback: 3 Minuten
+    MP3 = None
+    
+def get_audio_length(path):
+    if path.lower().endswith('.mp3') and MP3:
+        return MP3(path).info.length
+    elif path.lower().endswith('.wav'):
+        with wave.open(path, 'r') as f:
+            frames = f.getnframes()
+            rate = f.getframerate()
+            return frames / float(rate)
+    else:
+        return 180.0
+    
 
 start_time = None   
 song_length = None  
@@ -189,11 +208,11 @@ last_volume_change_time = 0
 def play_song(index, auto_mode=False):
     global current_song_index, start_time, song_length, paused, state
     current_song_index = index
-    current_file = mp3_files[index]
+    current_file = audio_files[index]
     song_path = os.path.join(mp3_folder, current_file)
     pygame.mixer.music.load(song_path)
     pygame.mixer.music.play()
-    song_length = get_mp3_length(song_path)
+    song_length = get_audio_length(song_path)
     start_time = time.time()
     paused = False
     if not auto_mode:
@@ -202,9 +221,10 @@ def play_song(index, auto_mode=False):
 # ----------------------------
 # Zeichenfunktionen für Menüs
 # ----------------------------
+my_font = pygame.font.Font('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 12)
 def draw_main_menu(screen, files, selected, current_song_index, paused, h_scroll, v_scroll):
     screen.fill((0, 0, 0))
-    font = pygame.font.SysFont(None, 16)
+    font = my_font
     
     NORMAL_LEFT_MARGIN = 10
     SELECTED_LEFT_MARGIN = 5   # Für ausgewählte Einträge geringerer Abstand links
@@ -229,13 +249,13 @@ def draw_main_menu(screen, files, selected, current_song_index, paused, h_scroll
 
         display_name = base_title + "   " if i == selected else base_title
         
-        # Setze die Textfarbe ? Beispiel: blau, wenn der Song läuft, sonst grün
+        # Setze die Textfarbe ? Beispiel: weiß, wenn der Song läuft, sonst grün
         text_color = (0, 215, 0)
         if current_song_index is not None and i == current_song_index:
             text_color = (255, 255, 255)
             
         if i == selected:
-            pygame.draw.rect(screen, (0, 215, 0), (0, y, WIDTH, line_height))
+            pygame.draw.rect(screen, (0, 215, 0), (0, y, WIDTH, line_height +1))
             text_color = (255, 255, 255)
             left_margin = 5
         
@@ -304,7 +324,7 @@ def draw_play_menu(screen, current_file, progress, elapsed, total, playing, scro
     effective_title_width = WIDTH - title_left_margin - title_right_margin
 
     # Songtitel rendern
-    scroll_text = os.path.splitext(mp3_files[current_song_index])[0] + "   "
+    scroll_text = os.path.splitext(audio_files[current_song_index])[0] + "   "
     title_surface = font.render(scroll_text, True, (0, 215, 0))
     title_width = title_surface.get_width()
 
@@ -396,10 +416,10 @@ while True:
         elif event.type == KEYDOWN:
             if state == "main":
                 if event.key == K_DOWN:
-                    selected_index = (selected_index + 1) % len(mp3_files)
+                    selected_index = (selected_index + 1) % len(audio_files)
                     main_scroll_offset = 0
                 elif event.key == K_UP:
-                    selected_index = (selected_index - 1) % len(mp3_files)
+                    selected_index = (selected_index - 1) % len(audio_files)
                     main_scroll_offset = 0
                 elif event.key in (K_RETURN, K_SPACE):
                     if current_song_index is None or selected_index != current_song_index:
@@ -428,9 +448,9 @@ while True:
                         pygame.mixer.music.pause()
                         paused = True
                 elif event.key == K_RIGHT:
-                    play_song((current_song_index + 1) % len(mp3_files))
+                    play_song((current_song_index + 1) % len(audio_files))
                 elif event.key == K_LEFT:
-                    play_song((current_song_index - 1) % len(mp3_files))
+                    play_song((current_song_index - 1) % len(audio_files))
                 elif event.key == K_UP:
                     volume = min(volume + 0.1, 1.0)
                     pygame.mixer.music.set_volume(volume)
@@ -445,7 +465,7 @@ while True:
     delta = current_encoder_position - last_encoder_position
     if delta != 0:
         if state == "main":
-            selected_index = (selected_index + delta) % len(mp3_files)
+            selected_index = (selected_index + delta) % len(audio_files)
         elif state == "play":
             volume = max(0.0, min(1.0, volume + (delta * 0.05)))
             pygame.mixer.music.set_volume(volume)
@@ -460,9 +480,9 @@ while True:
             else:
                 state = "play"
     if not left.value and state == "play":
-        play_song((current_song_index - 1) % len(mp3_files))
+        play_song((current_song_index - 1) % len(audio_files))
     if not right.value and state == "play":
-        play_song((current_song_index + 1) % len(mp3_files))
+        play_song((current_song_index + 1) % len(audio_files))
     if not up.value and state == "play":
         state = "main"
     elif not up.value and state == "main" and current_song_index is not None:
@@ -480,7 +500,7 @@ while True:
 
     # Menü- und Wiedergabe-Updates
     if state == "main":
-        font_main = pygame.font.SysFont(None, 16)
+        font_main = my_font
         line_height = font_main.get_linesize()
         spacing = 2
         selected_y = 5 + selected_index * (line_height + spacing) - main_menu_scroll_y
@@ -488,7 +508,7 @@ while True:
             main_menu_scroll_y = 5 + selected_index * (line_height + spacing) - 5
         elif selected_y > HEIGHT - line_height - 5:
             main_menu_scroll_y = selected_index * (line_height + spacing) - (HEIGHT - line_height - 5)
-        current_surface = font_main.render(os.path.splitext(mp3_files[selected_index])[0], True, (255,255,255))
+        current_surface = font_main.render(os.path.splitext(audio_files[selected_index])[0], True, (255,255,255))
         if current_surface.get_width() > EFFECTIVE_WIDTH:
             now = time.time()
             if now - last_main_scroll_time > 0.1:
@@ -496,18 +516,18 @@ while True:
                 last_main_scroll_time = now
         else:
             main_scroll_offset = 0
-        draw_main_menu(screen, mp3_files, selected_index, current_song_index, paused, main_scroll_offset, main_menu_scroll_y)
+        draw_main_menu(screen, audio_files, selected_index, current_song_index, paused, main_scroll_offset, main_menu_scroll_y)
         if current_song_index is not None:
             elapsed = time.time() - start_time if not paused else pygame.mixer.music.get_pos() / 1000.0
             progress = min(elapsed / song_length, 1.0) if song_length else 0
             if progress >= 1.0:
-                play_song((current_song_index + 1) % len(mp3_files))
+                play_song((current_song_index + 1) % len(audio_files))
     elif state == "play":
         elapsed = time.time() - start_time if not paused else pygame.mixer.music.get_pos() / 1000.0
         progress = min(elapsed / song_length, 1.0) if song_length else 0
 
         # Scroll-Offset für Play-Menu kontinuierlich erhöhen
-        title_text = os.path.splitext(mp3_files[current_song_index])[0]
+        title_text = os.path.splitext(audio_files[current_song_index])[0]
         title_width = pygame.font.SysFont(None, 16).size(title_text)[0]
         effective_title_width = WIDTH - 20  # 10px Rand links + 10px rechts
 
@@ -519,10 +539,10 @@ while True:
         else:
             play_scroll_offset = 0  # Reset wenn nicht gescrollt wird
 
-        draw_play_menu(screen, os.path.splitext(mp3_files[current_song_index])[0],
+        draw_play_menu(screen, os.path.splitext(audio_files[current_song_index])[0],
                        progress, elapsed, song_length, not paused, play_scroll_offset)
         if progress >= 1.0:
-            play_song((current_song_index + 1) % len(mp3_files))
+            play_song((current_song_index + 1) % len(audio_files))
 
     update_hardware_display(screen)
     clock.tick(60)
