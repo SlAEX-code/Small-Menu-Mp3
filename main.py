@@ -197,7 +197,7 @@ EFFECTIVE_WIDTH = WIDTH - LEFT_MARGIN - RIGHT_MARGIN
 main_menu_scroll_y = 0
 
 volume = 0.5
-pygame.mixer.music.set_volume(volume)
+player.audio_set_volume(int(volume * 100))
 
 VOLUME_DISPLAY_DURATION = 1.0  # Dauer in Sekunden, in der der Indikator sichtbar ist
 last_volume_change_time = 0
@@ -206,13 +206,17 @@ last_volume_change_time = 0
 # Hilfsfunktion zum Abspielen eines Songs
 # ----------------------------
 def play_song(index, auto_mode=False):
-    global current_song_index, start_time, song_length, paused, state
+    global current_song_index, start_time, song_length, paused, state, player
     current_song_index = index
     current_file = audio_files[index]
     song_path = os.path.join(mp3_folder, current_file)
-    pygame.mixer.music.load(song_path)
-    pygame.mixer.music.play()
-    song_length = get_audio_length(song_path)
+    media = vlc_instance.media_new(song_path)
+    player.set_media(media)
+    player.play()
+    # Kurze Wartezeit, damit VLC die Mediendaten laden kann
+    time.sleep(0.2)
+    # Hole die Länge des Songs in Sekunden
+    song_length = player.get_length() / 1000.0
     start_time = time.time()
     paused = False
     if not auto_mode:
@@ -427,37 +431,31 @@ while True:
                     else:
                         state = "play"
                 elif event.key == K_s and current_song_index is not None:
-                    if paused:
-                        pygame.mixer.music.unpause()
-                        start_time = time.time() - elapsed
-                        paused = False
-                    else:
-                        pygame.mixer.music.pause()
-                        paused = True
+                    player.pause()  # Pause/Resume toggeln
+                    paused = not paused
+                    if not paused:
+                        start_time = time.time() - (player.get_time() / 1000.0)
                 elif event.key == K_r and current_song_index is not None:
                     state = "play"
             elif state == "play":
                 if event.key == K_r:
                     state = "main"
                 elif event.key == K_s:
-                    if paused:
-                        pygame.mixer.music.unpause()
-                        start_time = time.time() - elapsed
-                        paused = False
-                    else:
-                        pygame.mixer.music.pause()
-                        paused = True
+                    player.pause()
+                    paused = not paused
+                    if not paused:
+                        start_time = time.time() - (player.get_time() / 1000.0)
                 elif event.key == K_RIGHT:
                     play_song((current_song_index + 1) % len(audio_files))
                 elif event.key == K_LEFT:
                     play_song((current_song_index - 1) % len(audio_files))
                 elif event.key == K_UP:
                     volume = min(volume + 0.1, 1.0)
-                    pygame.mixer.music.set_volume(volume)
+                    player.audio_set_volume(int(volume * 100))
                     last_volume_change_time = time.time()
                 elif event.key == K_DOWN:
                     volume = max(volume - 0.1, 0.0)
-                    pygame.mixer.music.set_volume(volume)
+                    player.audio_set_volume(int(volume * 100))
                     last_volume_change_time = time.time()
     
     # Encoder zur Navigation nutzen
@@ -468,7 +466,7 @@ while True:
             selected_index = (selected_index + delta) % len(audio_files)
         elif state == "play":
             volume = max(0.0, min(1.0, volume + (delta * 0.05)))
-            pygame.mixer.music.set_volume(volume)
+            player.audio_set_volume(int(volume * 100))
             last_volume_change_time = time.time()
         last_encoder_position = current_encoder_position
 
@@ -488,13 +486,8 @@ while True:
     elif not up.value and state == "main" and current_song_index is not None:
         state = "play"
     if not down.value and state in ("play", "main"):
-        if paused:
-            pygame.mixer.music.unpause()
-            start_time = time.time() - elapsed
-            paused = False
-        else:
-            pygame.mixer.music.pause()
-            paused = True
+        player.pause()  # Pause/Resume per Taste
+        paused = not paused
     
     
 
